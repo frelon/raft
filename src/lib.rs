@@ -3,4 +3,4 @@
 #[macro_use]
 extern crate alloc;
 
-mod node;
+pub mod node;
