@@ -41,7 +41,7 @@ fn main() {
     let mut node2 = LocalNode::<SimpleCommand>::new(NodeConfig::default(), &state);
     let mut node3 = LocalNode::<SimpleCommand>::new(NodeConfig::default(), &state);
     
-    match n.run_election() {
+    match node1.run_election() {
         Ok(()) => { info!("Election finished!"); },
         Err(err) => { error!("Election error: {:?}", err); },
     }

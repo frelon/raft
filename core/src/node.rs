@@ -1,6 +1,10 @@
 use alloc::vec::Vec;
+
 use core::time::Duration;
-use log::{info, trace, warn};
+
+use log::{
+    trace,
+};
 
 #[derive(Debug)]
 pub enum Error {
