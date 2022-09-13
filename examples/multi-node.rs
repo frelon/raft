@@ -15,6 +15,9 @@ use raft::node::{
     StateMachine,
     LocalNode,
     NodeConfig,
+    Vote,
+    LogEntry,
+
 };
 
 enum SimpleCommand {
@@ -52,12 +55,12 @@ impl<'state_machine, 'peers, LogType> LocalPeer<'state_machine, 'peers, LogType>
 }
 
 impl<'state_machine, 'peers, LogType> Peer<LogType> for LocalPeer<'state_machine, 'peers, LogType> {
-    fn request_vote(&self, term:usize) -> Result<raft::node::Vote,Error> {
-        self.remote.lock().unwrap().request_vote(term)
+    fn request_vote(&self, term:usize, candidate_id:usize, last_log_index:usize, last_log_term:usize) -> Result<Vote,Error> {
+        self.remote.lock().unwrap().request_vote(term, candidate_id, last_log_index, last_log_term)
     }
 
-    fn append_entries(&self, term:usize, entries:Vec<raft::node::LogEntry<LogType>>) -> Result<(),Error> {
-        self.remote.lock().unwrap().append_entries(term, entries)
+    fn append_entries(&self, term:usize, leader_id:usize, prev_log_index:usize, prev_log_term:usize, entries:Vec<LogEntry<LogType>>, leader_commit:usize) -> Result<(),Error> {
+        self.remote.lock().unwrap().append_entries(term, leader_id, prev_log_index, prev_log_term, entries, leader_commit)
     }
 }
 

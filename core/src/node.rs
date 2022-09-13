@@ -17,7 +17,8 @@ pub enum Vote {
     Against,
 }
 
-enum State {
+#[derive(Debug, PartialEq)]
+pub enum State {
     Follower,
     Candidate,
     Leader,
@@ -30,8 +31,8 @@ pub struct LogEntry<LogType> {
 }
 
 pub trait Peer<LogType> {
-    fn request_vote(&self, term:usize) -> Result<Vote,Error>;
-    fn append_entries(&self, term:usize, entries:Vec<LogEntry<LogType>>) -> Result<(),Error>;
+    fn request_vote(&self, term:usize, candidate_id:usize, last_log_index:usize, last_log_term:usize) -> Result<Vote,Error>;
+    fn append_entries(&self, term:usize, leader_id:usize, prev_log_index:usize, prev_log_term:usize, entries:Vec<LogEntry<LogType>>, leader_commit:usize) -> Result<(),Error>;
 }
 
 pub trait StateMachine<LogType> {
@@ -39,6 +40,7 @@ pub trait StateMachine<LogType> {
 }
 
 pub struct LocalNode<'state_machine, 'peers, LogType> {
+    config: NodeConfig,
     current_term: Option<usize>,
     voted_for: Option<usize>,
     state: State,
@@ -49,12 +51,23 @@ pub struct LocalNode<'state_machine, 'peers, LogType> {
 }
 
 pub struct NodeConfig {
-    election_timeout:Duration, 
+    id: usize,
+    election_timeout: Duration, 
 }
 
 impl Default for NodeConfig {
     fn default() -> Self {
         Self {
+            id: usize::default(),
+            election_timeout: Duration::default(),
+        }
+    }
+}
+
+impl NodeConfig {
+    pub fn new(id:usize) -> Self {
+        Self{
+            id,
             election_timeout: Duration::default(),
         }
     }
@@ -71,7 +84,12 @@ impl<'state_machine, 'peers, LogType> LocalNode<'state_machine, 'peers, LogType>
             logs: vec![],
             state: State::Follower,
             state_machine,
+            config,
          }
+    }
+
+    pub fn state(&self) -> &State {
+        &self.state 
     }
 
     pub fn add_peer(&mut self, peer:&'peers dyn Peer<LogType>) {
@@ -90,7 +108,7 @@ impl<'state_machine, 'peers, LogType> LocalNode<'state_machine, 'peers, LogType>
 
         trace!("Sending request_vote to {} peers", self.peers.len());
         for peer in self.peers.iter_mut() {
-            match peer.request_vote(new_term) {
+            match peer.request_vote(new_term, self.config.id, 0,0) {
                 Ok(Vote::For) => { votes += 1 },
                 Ok(Vote::Against) => {},
                 Err(_) => {
@@ -104,10 +122,11 @@ impl<'state_machine, 'peers, LogType> LocalNode<'state_machine, 'peers, LogType>
         if votes > (self.peers.len()/2) {
             trace!("Won election for term {}", new_term);
             self.current_term = Some(new_term);
+            self.state = State::Leader;
 
             trace!("Sending heartbeat to {} peers", self.peers.len());
             for peer in self.peers.iter_mut() {
-                match peer.append_entries(new_term, vec![]) {
+                match peer.append_entries(new_term, self.config.id, 0, 0, vec![], 0) {
                     Ok(()) => {},
                     Err(_) => {
                         return Err(Error::UnknownError);
@@ -116,11 +135,11 @@ impl<'state_machine, 'peers, LogType> LocalNode<'state_machine, 'peers, LogType>
             }
         }
 
-        trace!("Election finished");
+        trace!("Election concluded for term {new_term}");
         Ok(())
     }
 
-    pub fn request_vote(&mut self, term:usize) -> Result<Vote,Error> {
+    pub fn request_vote(&mut self, term:usize, candidate_id:usize, last_log_index:usize, last_log_term:usize) -> Result<Vote,Error> {
         trace!("Received request_vote for term {term}");
 
         if term > self.current_term.unwrap_or_default() {
@@ -133,10 +152,11 @@ impl<'state_machine, 'peers, LogType> LocalNode<'state_machine, 'peers, LogType>
         todo!()
     }
 
-    pub fn append_entries(&mut self, term:usize, entries:Vec<LogEntry<LogType>>) -> Result<(),Error> {
+    pub fn append_entries(&mut self, term:usize, leader_id:usize, prev_log_index:usize, prev_log_term:usize, entries:Vec<LogEntry<LogType>>, leader_commit:usize) -> Result<(),Error> {
         trace!("Received append_entries for term {term}");
 
         if term > self.current_term.unwrap_or_default() {
+            trace!("RPC with higher term received");
             self.state = State::Follower;
             self.current_term = Some(term);
             self.voted_for = Some(1);
@@ -180,12 +200,20 @@ mod tests {
         vote:Vote,
     }
     impl<LogType> Peer<LogType> for Voter {
-        fn request_vote(&self, term:usize) -> Result<Vote,Error> {
+        fn request_vote(&self, term:usize, candidate_id:usize, last_log_index:usize, last_log_term:usize) -> Result<Vote,Error> {
             Ok(self.vote)
         }
 
-        fn append_entries(&self, term:usize, entries:Vec<LogEntry<LogType>>) -> Result<(),Error> {
+        fn append_entries(&self, term:usize, leader_id:usize, prev_log_index:usize, prev_log_term:usize, entries:Vec<LogEntry<LogType>>, leader_commit:usize) -> Result<(),Error> {
             Ok(())
+        }
+    }
+
+    impl Voter {
+        fn new(vote:Vote) -> Self {
+            Self{
+                vote,
+            }
         }
     }
 
@@ -212,16 +240,51 @@ mod tests {
     }
 
     #[test]
-    fn election() {
+    fn election_peers_votes_yes() {
         let mut node1 = LocalNode::<Command>::new(NodeConfig::default(), &SimpleStateMachine{value:0});
-        let node2 = Voter{
-            vote: Vote::For
-        };
+        let node2 = Voter::new(Vote::For);
+        let node3 = Voter::new(Vote::For);
 
         node1.add_peer(&node2);
+        node1.add_peer(&node3);
 
         assert!(node1.run_election().is_ok());
 
         assert_eq!(node1.current_term, Some(1));
+        assert_eq!(node1.state, State::Leader);
+    }
+
+    #[test]
+    fn election_peers_votes_no() {
+        let mut node1 = LocalNode::<Command>::new(NodeConfig::default(), &SimpleStateMachine{value:0});
+        let node2 = Voter::new(Vote::Against);
+        let node3 = Voter::new(Vote::Against);
+
+        node1.add_peer(&node2);
+        node1.add_peer(&node3);
+
+        assert!(node1.run_election().is_ok());
+
+        assert_eq!(node1.current_term, None);
+        assert_eq!(node1.state, State::Follower);
+    }
+
+    #[test]
+    fn election_peers_small_majority() {
+        let mut node1 = LocalNode::<Command>::new(NodeConfig::default(), &SimpleStateMachine{value:0});
+        let node2 = Voter::new(Vote::Against);
+        let node3 = Voter::new(Vote::Against);
+        let node4 = Voter::new(Vote::For);
+        let node5 = Voter::new(Vote::For);
+
+        node1.add_peer(&node2);
+        node1.add_peer(&node3);
+        node1.add_peer(&node4);
+        node1.add_peer(&node5);
+
+        assert!(node1.run_election().is_ok());
+
+        assert_eq!(node1.current_term, Some(1));
+        assert_eq!(node1.state, State::Leader);
     }
 }
