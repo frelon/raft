@@ -11,7 +11,7 @@ pub enum Error {
     UnknownError,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub enum Vote {
     For,
     Against,
@@ -29,12 +29,21 @@ pub struct LogEntry<LogType> {
     log: LogType,
 }
 
+pub trait Peer<LogType> {
+    fn request_vote(&self, term:usize) -> Result<Vote,Error>;
+    fn append_entries(&self, term:usize, entries:Vec<LogEntry<LogType>>) -> Result<(),Error>;
+}
+
+pub trait StateMachine<LogType> {
+    fn apply(&mut self,log:LogType) -> Result<(), Error>;
+}
+
 pub struct LocalNode<'state_machine, 'peers, LogType> {
     current_term: Option<usize>,
     voted_for: Option<usize>,
     state: State,
 
-    peers: Vec<&'peers mut dyn Peer<LogType>>,
+    peers: Vec<&'peers dyn Peer<LogType>>,
     logs: Vec<LogEntry<LogType>>,
     state_machine: &'state_machine dyn StateMachine<LogType>,
 }
@@ -65,7 +74,7 @@ impl<'state_machine, 'peers, LogType> LocalNode<'state_machine, 'peers, LogType>
          }
     }
 
-    pub fn add_peer(&mut self, peer:&'peers mut dyn Peer<LogType>) {
+    pub fn add_peer(&mut self, peer:&'peers dyn Peer<LogType>) {
         self.peers.push(peer)
     }
 
@@ -110,15 +119,35 @@ impl<'state_machine, 'peers, LogType> LocalNode<'state_machine, 'peers, LogType>
         trace!("Election finished");
         Ok(())
     }
-}
 
-pub trait Peer<LogType> {
-    fn request_vote(&mut self, term:usize) -> Result<Vote,Error>;
-    fn append_entries(&mut self, term:usize, entries:Vec<LogEntry<LogType>>) -> Result<(),Error>;
-}
+    pub fn request_vote(&mut self, term:usize) -> Result<Vote,Error> {
+        trace!("Received request_vote for term {term}");
 
-pub trait StateMachine<LogType> {
-    fn apply(&mut self,log:LogType) -> Result<(), Error>;
+        if term > self.current_term.unwrap_or_default() {
+            self.state = State::Follower;
+            self.current_term = Some(term);
+            self.voted_for = Some(1);
+            return Ok(Vote::For);
+        }
+
+        todo!()
+    }
+
+    pub fn append_entries(&mut self, term:usize, entries:Vec<LogEntry<LogType>>) -> Result<(),Error> {
+        trace!("Received append_entries for term {term}");
+
+        if term > self.current_term.unwrap_or_default() {
+            self.state = State::Follower;
+            self.current_term = Some(term);
+            self.voted_for = Some(1);
+        }
+
+        if entries.len() == 0 {
+            return Ok(());
+        }
+
+        todo!()
+    }
 }
 
 #[cfg(test)]
@@ -147,42 +176,16 @@ mod tests {
         }
     }
 
-    impl<'state_machine, 'peers, LogType> Peer<LogType> for LocalNode<'state_machine, 'peers, LogType> {
-        fn append_entries(&mut self, term:usize, entries: Vec<LogEntry<LogType>>) -> Result<(), Error> {
-            if term > self.current_term.unwrap_or_default() {
-                self.state = State::Follower;
-                self.current_term = Some(term);
-                return Ok(());
-            }
-
-            todo!()
-        }
-
-        fn request_vote(&mut self, term:usize) -> Result<Vote, Error> {
-            if self.voted_for.is_some() {
-                return Ok(Vote::Against);
-            }
-
-            if matches!(self.current_term, Some(t) if term < t) {
-                return Ok(Vote::Against);
-            }
-
-            self.voted_for = Some(1);
-
-            Ok(Vote::For)
-        }
-    }
-
     struct Voter {
         vote:Vote,
     }
     impl<LogType> Peer<LogType> for Voter {
-        fn request_vote(&mut self, term:usize) -> Result<Vote,Error> {
-            Ok(self.vote.clone())
+        fn request_vote(&self, term:usize) -> Result<Vote,Error> {
+            Ok(self.vote)
         }
 
-        fn append_entries(&mut self, term:usize, entries:Vec<LogEntry<LogType>>) -> Result<(),Error> {
-            todo!()
+        fn append_entries(&self, term:usize, entries:Vec<LogEntry<LogType>>) -> Result<(),Error> {
+            Ok(())
         }
     }
 
@@ -211,13 +214,14 @@ mod tests {
     #[test]
     fn election() {
         let mut node1 = LocalNode::<Command>::new(NodeConfig::default(), &SimpleStateMachine{value:0});
-        let mut node2 = LocalNode::<Command>::new(NodeConfig::default(), &SimpleStateMachine{value:0});
+        let node2 = Voter{
+            vote: Vote::For
+        };
 
-        node1.add_peer(&mut node2);
+        node1.add_peer(&node2);
 
         assert!(node1.run_election().is_ok());
 
         assert_eq!(node1.current_term, Some(1));
-        assert_eq!(node2.current_term, Some(1));
     }
 }

@@ -19,8 +19,8 @@ jobs:
     - name: Run clippy
       run: cargo clippy
     - name: Build
-      run: cargo build --verbose
+      run: cargo build --workspace --verbose
     - name: Build examples
-      run: cargo build --examples
+      run: cargo build --workspace --examples
     - name: Run tests
-      run: cargo test --verbose
+      run: cargo test --workspace --verbose
