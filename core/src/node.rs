@@ -11,7 +11,7 @@ pub enum Error {
     UnknownError,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Vote {
     For,
     Against,
@@ -43,6 +43,7 @@ pub struct LocalNode<'state_machine, 'peers, LogType> {
     config: NodeConfig,
     current_term: Option<usize>,
     voted_for: Option<usize>,
+    leader_id: Option<usize>,
     state: State,
 
     peers: Vec<&'peers dyn Peer<LogType>>,
@@ -80,6 +81,7 @@ impl<'state_machine, 'peers, LogType> LocalNode<'state_machine, 'peers, LogType>
         LocalNode::<LogType>{
             current_term: None,
             voted_for: None,
+            leader_id: None,
             peers: vec![],
             logs: vec![],
             state: State::Follower,
@@ -88,8 +90,22 @@ impl<'state_machine, 'peers, LogType> LocalNode<'state_machine, 'peers, LogType>
          }
     }
 
+    pub fn with_term(mut self, term:usize) -> Self {
+        self.current_term = Some(term);
+        self
+    }
+
+    pub fn with_state(mut self, state:State) -> Self {
+        self.state = state;
+        self
+    }
+
     pub fn state(&self) -> &State {
         &self.state 
+    }
+
+    pub fn logs(&self) -> &Vec<LogEntry<LogType>> {
+        &self.logs
     }
 
     pub fn add_peer(&mut self, peer:&'peers dyn Peer<LogType>) {
@@ -99,7 +115,7 @@ impl<'state_machine, 'peers, LogType> LocalNode<'state_machine, 'peers, LogType>
     pub fn run_election(&mut self) -> Result<(), Error> {
         let new_term = match self.current_term {
             Some(term) => term+1,
-            None => 1,
+            None => 0,
         };
 
         trace!("Starting new election for term {}", new_term);
@@ -123,6 +139,7 @@ impl<'state_machine, 'peers, LogType> LocalNode<'state_machine, 'peers, LogType>
             trace!("Won election for term {}", new_term);
             self.current_term = Some(new_term);
             self.state = State::Leader;
+            self.leader_id = Some(self.config.id);
 
             trace!("Sending heartbeat to {} peers", self.peers.len());
             for peer in self.peers.iter_mut() {
@@ -142,14 +159,26 @@ impl<'state_machine, 'peers, LogType> LocalNode<'state_machine, 'peers, LogType>
     pub fn request_vote(&mut self, term:usize, candidate_id:usize, last_log_index:usize, last_log_term:usize) -> Result<Vote,Error> {
         trace!("Received request_vote for term {term}");
 
-        if term > self.current_term.unwrap_or_default() {
-            self.state = State::Follower;
-            self.current_term = Some(term);
-            self.voted_for = Some(1);
-            return Ok(Vote::For);
+        let current_term = self.current_term.unwrap_or(0);
+
+        if term < current_term {
+            trace!("Term {term} < {current_term}, voting against");
+            return Ok(Vote::Against);
         }
 
-        todo!()
+        if let Some(log_entry) = self.logs.get(last_log_index) {
+            if log_entry.term != last_log_term {
+                trace!("Log entry with index {} term mismatch {} != {}", last_log_index, last_log_term, log_entry.term);
+                return Ok(Vote::Against);
+            }
+        } else {
+            trace!("Log does not contain entry at {last_log_index}");
+            return Ok(Vote::Against);
+        }
+
+
+        trace!("Voting for {candidate_id} in term {term}");
+        Ok(Vote::For)
     }
 
     pub fn append_entries(&mut self, term:usize, leader_id:usize, prev_log_index:usize, prev_log_term:usize, entries:Vec<LogEntry<LogType>>, leader_commit:usize) -> Result<(),Error> {
@@ -159,14 +188,15 @@ impl<'state_machine, 'peers, LogType> LocalNode<'state_machine, 'peers, LogType>
             trace!("RPC with higher term received");
             self.state = State::Follower;
             self.current_term = Some(term);
-            self.voted_for = Some(1);
+            self.voted_for = None;
+            self.leader_id = Some(leader_id);
         }
 
-        if entries.len() == 0 {
-            return Ok(());
+        if entries.len() != 0 {
+            todo!("Append entries");
         }
 
-        todo!()
+        Ok(())
     }
 }
 
@@ -250,7 +280,7 @@ mod tests {
 
         assert!(node1.run_election().is_ok());
 
-        assert_eq!(node1.current_term, Some(1));
+        assert_eq!(node1.current_term, Some(0));
         assert_eq!(node1.state, State::Leader);
     }
 
@@ -271,7 +301,7 @@ mod tests {
 
     #[test]
     fn election_peers_small_majority() {
-        let mut node1 = LocalNode::<Command>::new(NodeConfig::default(), &SimpleStateMachine{value:0});
+        let mut node1 = LocalNode::<Command>::new(NodeConfig::new(1), &SimpleStateMachine{value:0});
         let node2 = Voter::new(Vote::Against);
         let node3 = Voter::new(Vote::Against);
         let node4 = Voter::new(Vote::For);
@@ -284,12 +314,13 @@ mod tests {
 
         assert!(node1.run_election().is_ok());
 
-        assert_eq!(node1.current_term, Some(1));
+        assert_eq!(node1.current_term, Some(0));
         assert_eq!(node1.state, State::Leader);
+        assert_eq!(node1.leader_id, Some(1));
     }
 
     #[test]
-    fn election_deadlock() {
+    fn election_deadlock_no_progress() {
         let mut node1 = LocalNode::<Command>::new(NodeConfig::default(), &SimpleStateMachine{value:0});
         let node2 = Voter::new(Vote::Against);
 
@@ -299,5 +330,32 @@ mod tests {
 
         assert_eq!(node1.current_term, None);
         assert_eq!(node1.state, State::Follower);
+    }
+
+    #[test]
+    fn request_vote_returns_against_for_smaller_term() {
+        let mut node1 = LocalNode::<Command>::new(NodeConfig::default(), &SimpleStateMachine{value:0}).with_term(10);
+
+        assert!(matches!(node1.request_vote(9, 1, 0, 0), Ok(Vote::Against)));
+    }
+
+    #[test]
+    fn heartbeat_with_higher_term_sets_follower() {
+        let mut node1 = LocalNode::<Command>::new(NodeConfig::default(), &SimpleStateMachine{value:0})
+            .with_term(10)
+            .with_state(State::Leader);
+
+        assert!(matches!(node1.append_entries(11, 2, 0, 0, vec![], 0), Ok(())));
+        assert_eq!(node1.state, State::Follower);
+        assert_eq!(node1.current_term, Some(11));
+    }
+
+    #[test]
+    fn append_entries_adds_entries() {
+        let mut node1 = LocalNode::<Command>::new(NodeConfig::default(), &SimpleStateMachine{value:0})
+            .with_term(10)
+            .with_state(State::Follower);
+
+        assert!(matches!(node1.append_entries(10, 2, 0, 0, vec![], 0), Ok(())));
     }
 }
