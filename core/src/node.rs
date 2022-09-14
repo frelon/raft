@@ -119,7 +119,7 @@ impl<'state_machine, 'peers, LogType> LocalNode<'state_machine, 'peers, LogType>
 
         trace!("Got {} votes", votes);
 
-        if votes > (self.peers.len()/2) {
+        if votes > ((self.peers.len()+1)/2) {
             trace!("Won election for term {}", new_term);
             self.current_term = Some(new_term);
             self.state = State::Leader;
@@ -286,5 +286,18 @@ mod tests {
 
         assert_eq!(node1.current_term, Some(1));
         assert_eq!(node1.state, State::Leader);
+    }
+
+    #[test]
+    fn election_deadlock() {
+        let mut node1 = LocalNode::<Command>::new(NodeConfig::default(), &SimpleStateMachine{value:0});
+        let node2 = Voter::new(Vote::Against);
+
+        node1.add_peer(&node2);
+
+        assert!(node1.run_election().is_ok());
+
+        assert_eq!(node1.current_term, None);
+        assert_eq!(node1.state, State::Follower);
     }
 }
