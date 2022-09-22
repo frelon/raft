@@ -6,6 +6,15 @@ use log::{
     trace,
 };
 
+use crate::{
+    term::Term,
+    log::{
+        Entry,
+        Storage,
+        Collection,
+    },
+};
+
 #[derive(Debug)]
 pub enum Error {
     UnknownError,
@@ -24,26 +33,13 @@ pub enum State {
     Leader,
 }
 
-type Term = usize;
-
-#[derive(Debug)]
-pub struct LogEntry<LogType> {
-    term: Term,
-    log: LogType,
-}
-
 pub trait Peer<LogType> {
-    fn request_vote(&self, term:Term, candidate_id:usize, last_log_index:usize, last_log_term:usize) -> Result<Vote,Error>;
-    fn append_entries(&self, term:Term, leader_id:usize, prev_log_index:usize, prev_log_term:usize, entries:Vec<LogEntry<LogType>>, leader_commit:usize) -> Result<(),Error>;
+    fn request_vote(&self, term:Term, candidate_id:usize, last_log_index:usize, last_log_term:Term) -> Result<Vote,Error>;
+    fn append_entries(&self, term:Term, leader_id:usize, prev_log_index:usize, prev_log_term:Term, entries:Collection<LogType>, leader_commit:usize) -> Result<(),Error>;
 }
 
 pub trait StateMachine<LogType> {
     fn apply(&mut self,log:LogType) -> Result<(), Error>;
-}
-
-pub trait LogStorage<LogType> {
-    fn get(&self, term:usize, index:usize) -> Result<LogType, ()>;
-    fn write(&mut self, log:LogEntry<LogType>) -> Result<(), ()>;
 }
 
 pub struct LocalNode<'state_machine, 'peers, 'log_storage, LogType> {
@@ -54,7 +50,7 @@ pub struct LocalNode<'state_machine, 'peers, 'log_storage, LogType> {
     state: State,
 
     peers: Vec<&'peers dyn Peer<LogType>>,
-    logs: &'log_storage dyn LogStorage<LogType>,
+    logs: &'log_storage dyn Storage<LogType>,
     state_machine: &'state_machine dyn StateMachine<LogType>,
 }
 
@@ -82,7 +78,7 @@ impl NodeConfig {
 }
 
 impl<'state_machine, 'peers, 'log_storage, LogType> LocalNode<'state_machine, 'peers, 'log_storage, LogType> {
-    pub fn new(config:NodeConfig, state_machine:&'state_machine dyn StateMachine<LogType>, log_storage:&'log_storage dyn LogStorage<LogType>) -> Self {
+    pub fn new(config:NodeConfig, state_machine:&'state_machine dyn StateMachine<LogType>, log_storage:&'log_storage dyn Storage<LogType>) -> Self {
         trace!("Creating new LocalNode");
 
         LocalNode::<LogType>{
@@ -111,7 +107,7 @@ impl<'state_machine, 'peers, 'log_storage, LogType> LocalNode<'state_machine, 'p
         &self.state 
     }
 
-    pub fn logs(&self) -> &dyn LogStorage<LogType> {
+    pub fn logs(&self) -> &dyn Storage<LogType> {
         self.logs
     }
 
@@ -163,7 +159,7 @@ impl<'state_machine, 'peers, 'log_storage, LogType> LocalNode<'state_machine, 'p
         Ok(())
     }
 
-    pub fn request_vote(&mut self, term:usize, candidate_id:usize, last_log_index:usize, last_log_term:usize) -> Result<Vote,Error> {
+    pub fn request_vote(&mut self, term:Term, candidate_id:usize, last_log_index:usize, last_log_term:Term) -> Result<Vote,Error> {
         trace!("Received request_vote for term {term}");
 
         let current_term = self.current_term.unwrap_or(0);
@@ -183,7 +179,7 @@ impl<'state_machine, 'peers, 'log_storage, LogType> LocalNode<'state_machine, 'p
         Ok(Vote::For)
     }
 
-    pub fn append_entries(&mut self, term:usize, leader_id:usize, prev_log_index:usize, prev_log_term:usize, entries:Vec<LogEntry<LogType>>, leader_commit:usize) -> Result<(),Error> {
+    pub fn append_entries(&mut self, term:Term, leader_id:usize, prev_log_index:usize, prev_log_term:Term, entries:Vec<Entry<LogType>>, leader_commit:usize) -> Result<(),Error> {
         trace!("Received append_entries for term {term}");
 
         if term > self.current_term.unwrap_or_default() {
@@ -229,18 +225,18 @@ mod tests {
     }
 
     struct InMemoryLogStorage<LogType> {
-        logs: Vec<LogEntry<LogType>>,
+        logs: Collection<LogType>,
     }
 
-    impl<LogType> LogStorage<LogType> for InMemoryLogStorage<LogType> {
-        fn get(&self, term:usize, index:usize) -> Result<LogType, ()> {
+    impl<LogType> Storage<LogType> for InMemoryLogStorage<LogType> {
+        fn get(&self, term:Term, index:usize) -> Result<LogType, ()> {
              if let Some(log) = self.logs.get(index) {
              }
 
              Err(())
         }
 
-        fn write(&mut self, log:LogEntry<LogType>) -> Result<(), ()> {
+        fn write(&mut self, log:Entry<LogType>) -> Result<(), ()> {
             self.logs.push(log);
             Ok(())
         }
@@ -258,11 +254,11 @@ mod tests {
         vote:Vote,
     }
     impl<LogType> Peer<LogType> for Voter {
-        fn request_vote(&self, term:usize, candidate_id:usize, last_log_index:usize, last_log_term:usize) -> Result<Vote,Error> {
+        fn request_vote(&self, term:Term, candidate_id:usize, last_log_index:usize, last_log_term:Term) -> Result<Vote,Error> {
             Ok(self.vote)
         }
 
-        fn append_entries(&self, term:usize, leader_id:usize, prev_log_index:usize, prev_log_term:usize, entries:Vec<LogEntry<LogType>>, leader_commit:usize) -> Result<(),Error> {
+        fn append_entries(&self, term:Term, leader_id:usize, prev_log_index:usize, prev_log_term:Term, entries:Collection<LogType>, leader_commit:usize) -> Result<(),Error> {
             Ok(())
         }
     }

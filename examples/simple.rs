@@ -4,13 +4,21 @@ use log::{
     LevelFilter,
 };
 
-use raft::node::{
-    Error,
-    StateMachine,
-    LocalNode,
-    NodeConfig,
-    LogStorage,
-    LogEntry,
+use raft::{
+    term::Term,
+
+    node::{
+        Error,
+        StateMachine,
+        LocalNode,
+        NodeConfig,
+    },
+
+    log::{
+        Storage,
+        Entry,
+        Collection,
+    }
 };
 
 enum SimpleCommand {
@@ -36,18 +44,15 @@ impl StateMachine<SimpleCommand> for SimpleStateMachine {
 }
 
 struct InMemoryLogStorage<LogType> {
-    logs: Vec<LogEntry<LogType>>,
+    logs: Collection<LogType>,
 }
 
-impl<LogType> LogStorage<LogType> for InMemoryLogStorage<LogType> {
-    fn get(&self, term:usize, index:usize) -> Result<LogType, ()> {
-         if let Some(log) = self.logs.get(index) {
-         }
-
-         Err(())
+impl<LogType> Storage<LogType> for InMemoryLogStorage<LogType> {
+    fn get(&self, term:Term, index:usize) -> Result<LogType, ()> {
+         todo!()
     }
 
-    fn write(&mut self, log:LogEntry<LogType>) -> Result<(), ()> {
+    fn write(&mut self, log:Entry<LogType>) -> Result<(), ()> {
         self.logs.push(log);
         Ok(())
     }

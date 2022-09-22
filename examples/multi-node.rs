@@ -9,15 +9,22 @@ use log::{
     LevelFilter,
 };
 
-use raft::node::{
-    Peer,
-    Error,
-    StateMachine,
-    LocalNode,
-    NodeConfig,
-    Vote,
-    LogEntry,
-    LogStorage,
+use raft::{
+    term::Term,
+
+    node::{
+        Peer,
+        Error,
+        StateMachine,
+        LocalNode,
+        NodeConfig,
+        Vote,
+    },
+    log::{
+        Entry,
+        Storage,
+        Collection,
+    },
 };
 
 enum SimpleCommand {
@@ -43,10 +50,10 @@ impl StateMachine<SimpleCommand> for SimpleStateMachine {
 }
 
 struct InMemoryLogStorage<LogType> {
-    logs: Vec<LogEntry<LogType>>,
+    logs: Collection<LogType>,
 }
 
-impl<LogType> LogStorage<LogType> for InMemoryLogStorage<LogType> {
+impl<LogType> Storage<LogType> for InMemoryLogStorage<LogType> {
     fn get(&self, term:usize, index:usize) -> Result<LogType, ()> {
          if let Some(log) = self.logs.get(index) {
          }
@@ -54,7 +61,7 @@ impl<LogType> LogStorage<LogType> for InMemoryLogStorage<LogType> {
          Err(())
     }
 
-    fn write(&mut self, log:LogEntry<LogType>) -> Result<(), ()> {
+    fn write(&mut self, log:Entry<LogType>) -> Result<(), ()> {
         self.logs.push(log);
         Ok(())
     }
@@ -85,7 +92,7 @@ impl<'state_machine, 'peers, 'log_storage, LogType> Peer<LogType> for LocalPeer<
         self.remote.lock().unwrap().request_vote(term, candidate_id, last_log_index, last_log_term)
     }
 
-    fn append_entries(&self, term:usize, leader_id:usize, prev_log_index:usize, prev_log_term:usize, entries:Vec<LogEntry<LogType>>, leader_commit:usize) -> Result<(),Error> {
+    fn append_entries(&self, term:Term, leader_id:usize, prev_log_index:usize, prev_log_term:Term, entries:Collection<LogType>, leader_commit:usize) -> Result<(),Error> {
         self.remote.lock().unwrap().append_entries(term, leader_id, prev_log_index, prev_log_term, entries, leader_commit)
     }
 }
