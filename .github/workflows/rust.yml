@@ -16,6 +16,13 @@ jobs:
     steps:
     - uses: actions/checkout@v3
 
+    - name: Install latest nightly
+      uses: actions-rs/toolchain@v1
+      with:
+          toolchain: nightly
+          override: true
+          components: rustfmt, clippy
+
     - name: Run clippy
       run: cargo clippy
     - name: Build
