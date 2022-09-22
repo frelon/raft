@@ -328,7 +328,7 @@ mod tests {
     #[test]
     fn election_peers_small_majority() {
         let storage = InMemoryLogStorage::default();
-        let mut node1 = LocalNode::<Command>::new(NodeConfig::default(), &SimpleStateMachine{value:0}, &storage);
+        let mut node1 = LocalNode::<Command>::new(NodeConfig::new(1), &SimpleStateMachine{value:0}, &storage);
         let node2 = Voter::new(Vote::Against);
         let node3 = Voter::new(Vote::Against);
         let node4 = Voter::new(Vote::For);
