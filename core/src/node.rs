@@ -24,22 +24,29 @@ pub enum State {
     Leader,
 }
 
+type Term = usize;
+
 #[derive(Debug)]
 pub struct LogEntry<LogType> {
-    term: usize,
+    term: Term,
     log: LogType,
 }
 
 pub trait Peer<LogType> {
-    fn request_vote(&self, term:usize, candidate_id:usize, last_log_index:usize, last_log_term:usize) -> Result<Vote,Error>;
-    fn append_entries(&self, term:usize, leader_id:usize, prev_log_index:usize, prev_log_term:usize, entries:Vec<LogEntry<LogType>>, leader_commit:usize) -> Result<(),Error>;
+    fn request_vote(&self, term:Term, candidate_id:usize, last_log_index:usize, last_log_term:usize) -> Result<Vote,Error>;
+    fn append_entries(&self, term:Term, leader_id:usize, prev_log_index:usize, prev_log_term:usize, entries:Vec<LogEntry<LogType>>, leader_commit:usize) -> Result<(),Error>;
 }
 
 pub trait StateMachine<LogType> {
     fn apply(&mut self,log:LogType) -> Result<(), Error>;
 }
 
-pub struct LocalNode<'state_machine, 'peers, LogType> {
+pub trait LogStorage<LogType> {
+    fn get(&self, term:usize, index:usize) -> Result<LogType, ()>;
+    fn write(&mut self, log:LogEntry<LogType>) -> Result<(), ()>;
+}
+
+pub struct LocalNode<'state_machine, 'peers, 'log_storage, LogType> {
     config: NodeConfig,
     current_term: Option<usize>,
     voted_for: Option<usize>,
@@ -47,7 +54,7 @@ pub struct LocalNode<'state_machine, 'peers, LogType> {
     state: State,
 
     peers: Vec<&'peers dyn Peer<LogType>>,
-    logs: Vec<LogEntry<LogType>>,
+    logs: &'log_storage dyn LogStorage<LogType>,
     state_machine: &'state_machine dyn StateMachine<LogType>,
 }
 
@@ -74,8 +81,8 @@ impl NodeConfig {
     }
 }
 
-impl<'state_machine, 'peers, LogType> LocalNode<'state_machine, 'peers, LogType> {
-    pub fn new(config:NodeConfig, state_machine:&'state_machine dyn StateMachine<LogType>) -> Self {
+impl<'state_machine, 'peers, 'log_storage, LogType> LocalNode<'state_machine, 'peers, 'log_storage, LogType> {
+    pub fn new(config:NodeConfig, state_machine:&'state_machine dyn StateMachine<LogType>, log_storage:&'log_storage dyn LogStorage<LogType>) -> Self {
         trace!("Creating new LocalNode");
 
         LocalNode::<LogType>{
@@ -83,7 +90,7 @@ impl<'state_machine, 'peers, LogType> LocalNode<'state_machine, 'peers, LogType>
             voted_for: None,
             leader_id: None,
             peers: vec![],
-            logs: vec![],
+            logs: log_storage,
             state: State::Follower,
             state_machine,
             config,
@@ -104,8 +111,8 @@ impl<'state_machine, 'peers, LogType> LocalNode<'state_machine, 'peers, LogType>
         &self.state 
     }
 
-    pub fn logs(&self) -> &Vec<LogEntry<LogType>> {
-        &self.logs
+    pub fn logs(&self) -> &dyn LogStorage<LogType> {
+        self.logs
     }
 
     pub fn add_peer(&mut self, peer:&'peers dyn Peer<LogType>) {
@@ -166,15 +173,10 @@ impl<'state_machine, 'peers, LogType> LocalNode<'state_machine, 'peers, LogType>
             return Ok(Vote::Against);
         }
 
-        if let Some(log_entry) = self.logs.get(last_log_index) {
-            if log_entry.term != last_log_term {
-                trace!("Log entry with index {} term mismatch {} != {}", last_log_index, last_log_term, log_entry.term);
-                return Ok(Vote::Against);
-            }
-        } else {
-            trace!("Log does not contain entry at {last_log_index}");
+        let Ok(log_entry) = self.logs.get(last_log_term, last_log_index) else {
+            trace!("Log does not contain entry at {last_log_index},{last_log_term}");
             return Ok(Vote::Against);
-        }
+        };
 
 
         trace!("Voting for {candidate_id} in term {term}");
@@ -226,6 +228,32 @@ mod tests {
         }
     }
 
+    struct InMemoryLogStorage<LogType> {
+        logs: Vec<LogEntry<LogType>>,
+    }
+
+    impl<LogType> LogStorage<LogType> for InMemoryLogStorage<LogType> {
+        fn get(&self, term:usize, index:usize) -> Result<LogType, ()> {
+             if let Some(log) = self.logs.get(index) {
+             }
+
+             Err(())
+        }
+
+        fn write(&mut self, log:LogEntry<LogType>) -> Result<(), ()> {
+            self.logs.push(log);
+            Ok(())
+        }
+    }
+
+    impl<LogType> Default for InMemoryLogStorage<LogType> {
+        fn default() -> Self {
+            Self {
+                logs: vec![],
+            }
+        }
+    }
+
     struct Voter {
         vote:Vote,
     }
@@ -249,7 +277,7 @@ mod tests {
 
     #[test]
     fn new_node() {
-        let _node = LocalNode::<Command>::new(NodeConfig::default(), &SimpleStateMachine{value:20});
+        let _node = LocalNode::<Command>::new(NodeConfig::default(), &SimpleStateMachine{value:20}, &InMemoryLogStorage::default());
         assert!(true)
     }
 
@@ -271,7 +299,8 @@ mod tests {
 
     #[test]
     fn election_peers_votes_yes() {
-        let mut node1 = LocalNode::<Command>::new(NodeConfig::default(), &SimpleStateMachine{value:0});
+        let storage = InMemoryLogStorage::default();
+        let mut node1 = LocalNode::<Command>::new(NodeConfig::default(), &SimpleStateMachine{value:0}, &storage);
         let node2 = Voter::new(Vote::For);
         let node3 = Voter::new(Vote::For);
 
@@ -286,7 +315,8 @@ mod tests {
 
     #[test]
     fn election_peers_votes_no() {
-        let mut node1 = LocalNode::<Command>::new(NodeConfig::default(), &SimpleStateMachine{value:0});
+        let storage = InMemoryLogStorage::default();
+        let mut node1 = LocalNode::<Command>::new(NodeConfig::default(), &SimpleStateMachine{value:0}, &storage);
         let node2 = Voter::new(Vote::Against);
         let node3 = Voter::new(Vote::Against);
 
@@ -301,7 +331,8 @@ mod tests {
 
     #[test]
     fn election_peers_small_majority() {
-        let mut node1 = LocalNode::<Command>::new(NodeConfig::new(1), &SimpleStateMachine{value:0});
+        let storage = InMemoryLogStorage::default();
+        let mut node1 = LocalNode::<Command>::new(NodeConfig::default(), &SimpleStateMachine{value:0}, &storage);
         let node2 = Voter::new(Vote::Against);
         let node3 = Voter::new(Vote::Against);
         let node4 = Voter::new(Vote::For);
@@ -321,7 +352,8 @@ mod tests {
 
     #[test]
     fn election_deadlock_no_progress() {
-        let mut node1 = LocalNode::<Command>::new(NodeConfig::default(), &SimpleStateMachine{value:0});
+        let storage = InMemoryLogStorage::default();
+        let mut node1 = LocalNode::<Command>::new(NodeConfig::default(), &SimpleStateMachine{value:0}, &storage);
         let node2 = Voter::new(Vote::Against);
 
         node1.add_peer(&node2);
@@ -334,14 +366,16 @@ mod tests {
 
     #[test]
     fn request_vote_returns_against_for_smaller_term() {
-        let mut node1 = LocalNode::<Command>::new(NodeConfig::default(), &SimpleStateMachine{value:0}).with_term(10);
+        let storage = InMemoryLogStorage::default();
+        let mut node1 = LocalNode::<Command>::new(NodeConfig::default(), &SimpleStateMachine{value:0}, &storage).with_term(10);
 
         assert!(matches!(node1.request_vote(9, 1, 0, 0), Ok(Vote::Against)));
     }
 
     #[test]
     fn heartbeat_with_higher_term_sets_follower() {
-        let mut node1 = LocalNode::<Command>::new(NodeConfig::default(), &SimpleStateMachine{value:0})
+        let storage = InMemoryLogStorage::default();
+        let mut node1 = LocalNode::<Command>::new(NodeConfig::default(), &SimpleStateMachine{value:0}, &storage)
             .with_term(10)
             .with_state(State::Leader);
 
@@ -352,7 +386,8 @@ mod tests {
 
     #[test]
     fn append_entries_adds_entries() {
-        let mut node1 = LocalNode::<Command>::new(NodeConfig::default(), &SimpleStateMachine{value:0})
+        let storage = InMemoryLogStorage::default();
+        let mut node1 = LocalNode::<Command>::new(NodeConfig::default(), &SimpleStateMachine{value:0}, &storage)
             .with_term(10)
             .with_state(State::Follower);
 

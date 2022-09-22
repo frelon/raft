@@ -17,7 +17,7 @@ use raft::node::{
     NodeConfig,
     Vote,
     LogEntry,
-
+    LogStorage,
 };
 
 enum SimpleCommand {
@@ -42,19 +42,45 @@ impl StateMachine<SimpleCommand> for SimpleStateMachine {
     }
 }
 
-struct LocalPeer<'state_machine, 'peers, LogType> {
-    remote:Arc<Mutex<LocalNode<'state_machine, 'peers, LogType>>>,
+struct InMemoryLogStorage<LogType> {
+    logs: Vec<LogEntry<LogType>>,
 }
 
-impl<'state_machine, 'peers, LogType> LocalPeer<'state_machine, 'peers, LogType> {
-    fn new(node:Arc<Mutex<LocalNode<'state_machine, 'peers, LogType>>>) -> Self {
+impl<LogType> LogStorage<LogType> for InMemoryLogStorage<LogType> {
+    fn get(&self, term:usize, index:usize) -> Result<LogType, ()> {
+         if let Some(log) = self.logs.get(index) {
+         }
+
+         Err(())
+    }
+
+    fn write(&mut self, log:LogEntry<LogType>) -> Result<(), ()> {
+        self.logs.push(log);
+        Ok(())
+    }
+}
+
+impl<LogType> Default for InMemoryLogStorage<LogType> {
+    fn default() -> Self {
+        Self {
+            logs: vec![],
+        }
+    }
+}
+
+struct LocalPeer<'state_machine, 'peers, 'log_storage, LogType> {
+    remote:Arc<Mutex<LocalNode<'state_machine, 'peers, 'log_storage, LogType>>>,
+}
+
+impl<'state_machine, 'peers, 'log_storage, LogType> LocalPeer<'state_machine, 'peers, 'log_storage, LogType> {
+    fn new(node:Arc<Mutex<LocalNode<'state_machine, 'peers, 'log_storage, LogType>>>) -> Self {
         Self{
             remote:node,
         }
     }
 }
 
-impl<'state_machine, 'peers, LogType> Peer<LogType> for LocalPeer<'state_machine, 'peers, LogType> {
+impl<'state_machine, 'peers, 'log_storage, LogType> Peer<LogType> for LocalPeer<'state_machine, 'peers, 'log_storage, LogType> {
     fn request_vote(&self, term:usize, candidate_id:usize, last_log_index:usize, last_log_term:usize) -> Result<Vote,Error> {
         self.remote.lock().unwrap().request_vote(term, candidate_id, last_log_index, last_log_term)
     }
@@ -67,10 +93,17 @@ impl<'state_machine, 'peers, LogType> Peer<LogType> for LocalPeer<'state_machine
 fn main() {
     env_logger::Builder::from_default_env().filter(None, LevelFilter::Trace).init();
 
-    let state = SimpleStateMachine{value:0};
-    let node1 = Arc::new(Mutex::new(LocalNode::<SimpleCommand>::new(NodeConfig::default(), &state)));
-    let node2 = Arc::new(Mutex::new(LocalNode::<SimpleCommand>::new(NodeConfig::default(), &state)));
-    let node3 = Arc::new(Mutex::new(LocalNode::<SimpleCommand>::new(NodeConfig::default(), &state)));
+    let state1 = SimpleStateMachine{value:0};
+    let storage1 = InMemoryLogStorage::default();
+    let node1 = Arc::new(Mutex::new(LocalNode::<SimpleCommand>::new(NodeConfig::default(), &state1, &storage1)));
+
+    let state2 = SimpleStateMachine{value:0};
+    let storage2 = InMemoryLogStorage::default();
+    let node2 = Arc::new(Mutex::new(LocalNode::<SimpleCommand>::new(NodeConfig::default(), &state2, &storage2)));
+
+    let state3 = SimpleStateMachine{value:0};
+    let storage3 = InMemoryLogStorage::default();
+    let node3 = Arc::new(Mutex::new(LocalNode::<SimpleCommand>::new(NodeConfig::default(), &state3, &storage3)));
 
     let peer1 = LocalPeer::<SimpleCommand>::new(node1.clone());
     let peer2 = LocalPeer::<SimpleCommand>::new(node2.clone());
