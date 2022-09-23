@@ -3,6 +3,6 @@
 #[macro_use]
 extern crate alloc;
 
-pub mod term;
 pub mod log;
 pub mod node;
+pub mod term;
