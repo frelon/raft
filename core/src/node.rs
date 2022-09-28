@@ -21,7 +21,7 @@ pub enum Vote {
 }
 
 #[derive(Debug, PartialEq)]
-pub enum State {
+pub enum Role {
     Follower,
     Candidate,
     Leader,
@@ -51,23 +51,23 @@ pub trait StateMachine<LogType> {
 }
 
 pub struct LocalNode<'state_machine, 'peers, 'log_storage, LogType> {
-    config: NodeConfig,
+    config: Config,
     current_term: Option<usize>,
     voted_for: Option<usize>,
     leader_id: Option<usize>,
-    state: State,
+    role: Role,
 
     peers: Vec<&'peers dyn Peer<LogType>>,
     logs: &'log_storage dyn Storage<LogType>,
     state_machine: &'state_machine dyn StateMachine<LogType>,
 }
 
-pub struct NodeConfig {
+pub struct Config {
     id: usize,
     election_timeout: Duration,
 }
 
-impl Default for NodeConfig {
+impl Default for Config {
     fn default() -> Self {
         Self {
             id: usize::default(),
@@ -76,7 +76,7 @@ impl Default for NodeConfig {
     }
 }
 
-impl NodeConfig {
+impl Config {
     pub fn new(id: usize) -> Self {
         Self {
             id,
@@ -89,7 +89,7 @@ impl<'state_machine, 'peers, 'log_storage, LogType>
     LocalNode<'state_machine, 'peers, 'log_storage, LogType>
 {
     pub fn new(
-        config: NodeConfig,
+        config: Config,
         state_machine: &'state_machine dyn StateMachine<LogType>,
         log_storage: &'log_storage dyn Storage<LogType>,
     ) -> Self {
@@ -101,7 +101,7 @@ impl<'state_machine, 'peers, 'log_storage, LogType>
             leader_id: None,
             peers: vec![],
             logs: log_storage,
-            state: State::Follower,
+            role: Role::Follower,
             state_machine,
             config,
         }
@@ -112,13 +112,13 @@ impl<'state_machine, 'peers, 'log_storage, LogType>
         self
     }
 
-    pub fn with_state(mut self, state: State) -> Self {
-        self.state = state;
+    pub fn with_role(mut self, role: Role) -> Self {
+        self.role = role;
         self
     }
 
-    pub fn state(&self) -> &State {
-        &self.state
+    pub fn role(&self) -> &Role {
+        &self.role
     }
 
     pub fn logs(&self) -> &dyn Storage<LogType> {
@@ -155,7 +155,7 @@ impl<'state_machine, 'peers, 'log_storage, LogType>
         if votes > ((self.peers.len() + 1) / 2) {
             trace!("Won election for term {}", new_term);
             self.current_term = Some(new_term);
-            self.state = State::Leader;
+            self.role = Role::Leader;
             self.leader_id = Some(self.config.id);
 
             trace!("Sending heartbeat to {} peers", self.peers.len());
@@ -211,7 +211,7 @@ impl<'state_machine, 'peers, 'log_storage, LogType>
 
         if term > self.current_term.unwrap_or_default() {
             trace!("RPC with higher term received");
-            self.state = State::Follower;
+            self.role = Role::Follower;
             self.current_term = Some(term);
             self.voted_for = None;
             self.leader_id = Some(leader_id);
@@ -310,7 +310,7 @@ mod tests {
     #[test]
     fn new_node() {
         let _node = LocalNode::<Command>::new(
-            NodeConfig::default(),
+            Config::default(),
             &SimpleStateMachine { value: 20 },
             &InMemoryLogStorage::default(),
         );
@@ -335,7 +335,7 @@ mod tests {
     fn election_peers_votes_yes() {
         let storage = InMemoryLogStorage::default();
         let mut node1 = LocalNode::<Command>::new(
-            NodeConfig::default(),
+            Config::default(),
             &SimpleStateMachine { value: 0 },
             &storage,
         );
@@ -348,14 +348,14 @@ mod tests {
         assert!(node1.run_election().is_ok());
 
         assert_eq!(node1.current_term, Some(0));
-        assert_eq!(node1.state, State::Leader);
+        assert_eq!(node1.role, Role::Leader);
     }
 
     #[test]
     fn election_peers_votes_no() {
         let storage = InMemoryLogStorage::default();
         let mut node1 = LocalNode::<Command>::new(
-            NodeConfig::default(),
+            Config::default(),
             &SimpleStateMachine { value: 0 },
             &storage,
         );
@@ -368,14 +368,14 @@ mod tests {
         assert!(node1.run_election().is_ok());
 
         assert_eq!(node1.current_term, None);
-        assert_eq!(node1.state, State::Follower);
+        assert_eq!(node1.role, Role::Follower);
     }
 
     #[test]
     fn election_peers_small_majority() {
         let storage = InMemoryLogStorage::default();
         let mut node1 = LocalNode::<Command>::new(
-            NodeConfig::new(1),
+            Config::new(1),
             &SimpleStateMachine { value: 0 },
             &storage,
         );
@@ -392,7 +392,7 @@ mod tests {
         assert!(node1.run_election().is_ok());
 
         assert_eq!(node1.current_term, Some(0));
-        assert_eq!(node1.state, State::Leader);
+        assert_eq!(node1.role, Role::Leader);
         assert_eq!(node1.leader_id, Some(1));
     }
 
@@ -400,7 +400,7 @@ mod tests {
     fn election_deadlock_no_progress() {
         let storage = InMemoryLogStorage::default();
         let mut node1 = LocalNode::<Command>::new(
-            NodeConfig::default(),
+            Config::default(),
             &SimpleStateMachine { value: 0 },
             &storage,
         );
@@ -411,14 +411,14 @@ mod tests {
         assert!(node1.run_election().is_ok());
 
         assert_eq!(node1.current_term, None);
-        assert_eq!(node1.state, State::Follower);
+        assert_eq!(node1.role, Role::Follower);
     }
 
     #[test]
     fn request_vote_returns_against_for_smaller_term() {
         let storage = InMemoryLogStorage::default();
         let mut node1 = LocalNode::<Command>::new(
-            NodeConfig::default(),
+            Config::default(),
             &SimpleStateMachine { value: 0 },
             &storage,
         )
@@ -431,18 +431,18 @@ mod tests {
     fn heartbeat_with_higher_term_sets_follower() {
         let storage = InMemoryLogStorage::default();
         let mut node1 = LocalNode::<Command>::new(
-            NodeConfig::default(),
+            Config::default(),
             &SimpleStateMachine { value: 0 },
             &storage,
         )
         .with_term(10)
-        .with_state(State::Leader);
+        .with_role(Role::Leader);
 
         assert!(matches!(
             node1.append_entries(11, 2, 0, 0, vec![], 0),
             Ok(())
         ));
-        assert_eq!(node1.state, State::Follower);
+        assert_eq!(node1.role, Role::Follower);
         assert_eq!(node1.current_term, Some(11));
     }
 
@@ -450,12 +450,12 @@ mod tests {
     fn append_entries_adds_entries() {
         let storage = InMemoryLogStorage::default();
         let mut node1 = LocalNode::<Command>::new(
-            NodeConfig::default(),
+            Config::default(),
             &SimpleStateMachine { value: 0 },
             &storage,
         )
         .with_term(10)
-        .with_state(State::Follower);
+        .with_role(Role::Follower);
 
         assert!(matches!(
             node1.append_entries(10, 2, 0, 0, vec![], 0),

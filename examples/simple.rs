@@ -2,7 +2,7 @@ use log::{error, info, LevelFilter};
 
 use raft::{
     log::{Collection, Entry, Storage},
-    node::{Error, LocalNode, NodeConfig, StateMachine},
+    node::{Error, LocalNode, Config, StateMachine},
     term::Term,
 };
 
@@ -43,7 +43,7 @@ impl<LogType> Storage<LogType> for InMemoryLogStorage<LogType> {
         todo!()
     }
 
-    fn write(&mut self, log: Entry<LogType>) -> Result<(), ()> {
+    fn write(&mut self, log: Entry<LogType>) -> Result<(), Error> {
         self.logs.push(log);
         Ok(())
     }
@@ -62,7 +62,7 @@ fn main() {
 
     let state = SimpleStateMachine { value: 0 };
     let storage = InMemoryLogStorage::default();
-    let mut n = LocalNode::<SimpleCommand>::new(NodeConfig::default(), &state, &storage);
+    let mut n = LocalNode::<SimpleCommand>::new(Config::default(), &state, &storage);
 
     match n.run_election() {
         Ok(()) => {

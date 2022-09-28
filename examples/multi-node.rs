@@ -4,7 +4,7 @@ use log::{error, info, LevelFilter};
 
 use raft::{
     log::{Collection, Entry, Storage},
-    node::{Error, LocalNode, NodeConfig, Peer, StateMachine, Vote},
+    node::{Error, LocalNode, Config, Peer, StateMachine, Vote},
     term::Term,
 };
 
@@ -47,7 +47,7 @@ impl<LogType> Storage<LogType> for InMemoryLogStorage<LogType> {
         Err(())
     }
 
-    fn write(&mut self, log: Entry<LogType>) -> Result<(), ()> {
+    fn write(&mut self, log: Entry<LogType>) -> Result<(), Error> {
         self.logs.push(log);
         Ok(())
     }
@@ -115,7 +115,7 @@ fn main() {
     let state1 = SimpleStateMachine { value: 0 };
     let storage1 = InMemoryLogStorage::default();
     let node1 = Arc::new(Mutex::new(LocalNode::<SimpleCommand>::new(
-        NodeConfig::default(),
+        Config::default(),
         &state1,
         &storage1,
     )));
@@ -123,7 +123,7 @@ fn main() {
     let state2 = SimpleStateMachine { value: 0 };
     let storage2 = InMemoryLogStorage::default();
     let node2 = Arc::new(Mutex::new(LocalNode::<SimpleCommand>::new(
-        NodeConfig::default(),
+        Config::default(),
         &state2,
         &storage2,
     )));
@@ -131,7 +131,7 @@ fn main() {
     let state3 = SimpleStateMachine { value: 0 };
     let storage3 = InMemoryLogStorage::default();
     let node3 = Arc::new(Mutex::new(LocalNode::<SimpleCommand>::new(
-        NodeConfig::default(),
+        Config::default(),
         &state3,
         &storage3,
     )));

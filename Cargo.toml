@@ -14,3 +14,5 @@ members = [
 env_logger = "0.9.0"
 log = "0.4"
 raft = { path = "core" }
+sled = "0.34.7"
+zerocopy = "0.6.1"
