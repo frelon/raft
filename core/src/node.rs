@@ -121,7 +121,7 @@ impl<'state_machine, 'peers, 'log_storage, LogType>
         &self.role
     }
 
-    pub fn logs(&self) -> &dyn Storage<LogType> {
+    pub fn storage(&self) -> &dyn Storage<LogType> {
         self.logs
     }
 
@@ -374,11 +374,8 @@ mod tests {
     #[test]
     fn election_peers_small_majority() {
         let storage = InMemoryLogStorage::default();
-        let mut node1 = LocalNode::<Command>::new(
-            Config::new(1),
-            &SimpleStateMachine { value: 0 },
-            &storage,
-        );
+        let mut node1 =
+            LocalNode::<Command>::new(Config::new(1), &SimpleStateMachine { value: 0 }, &storage);
         let node2 = Voter::new(Vote::Against);
         let node3 = Voter::new(Vote::Against);
         let node4 = Voter::new(Vote::For);

@@ -4,7 +4,7 @@ use log::{error, info, LevelFilter};
 
 use raft::{
     log::{Collection, Entry, Storage},
-    node::{Error, LocalNode, Config, Peer, StateMachine, Vote},
+    node::{Config, Error, LocalNode, Peer, StateMachine, Vote},
     term::Term,
 };
 

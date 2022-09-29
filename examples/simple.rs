@@ -2,7 +2,7 @@ use log::{error, info, LevelFilter};
 
 use raft::{
     log::{Collection, Entry, Storage},
-    node::{Error, LocalNode, Config, StateMachine},
+    node::{Config, Error, LocalNode, StateMachine},
     term::Term,
 };
 
