@@ -6,25 +6,17 @@ use raft::{
     term::Term,
 };
 
-use sled::{Db, IVec};
+use sled::Db;
 
 use std::{convert::TryInto, io::ErrorKind};
 
+use serde::{Serialize, Deserialize};
+
+#[derive(Serialize, Deserialize, PartialEq, Debug)]
 enum KvCommand {
     Set(String, u32),
     Incr(String),
     Decr(String),
-}
-
-impl Into<IVec> for KvCommand {
-    fn into(self) -> IVec {
-        match self {
-            KvCommand::Set(k, v) => IVec::from(Box::from(v.to_be_bytes())),
-            KvCommand::Incr(k) => IVec::from(k.bytes().collect::<Box<[u8]>>()),
-            KvCommand::Decr(k) => IVec::from(k.bytes().collect::<Box<[u8]>>()),
-        };
-        todo!("fix this serialization")
-    }
 }
 
 struct KvMachine<'db> {
@@ -89,15 +81,15 @@ impl<'db> SledLogStorage<'db> {
     }
 }
 
-impl<'db> Storage<KvCommand> for SledLogStorage<'db> {
+impl<'db, 'entry> Storage<'entry, KvCommand> for SledLogStorage<'db> {
     fn get(&self, term: Term, index: usize) -> Result<KvCommand, ()> {
         todo!()
     }
 
-    fn write(&mut self, log: Entry<KvCommand>) -> Result<(), Error> {
+    fn write(&mut self, log: &'entry Entry<KvCommand>) -> Result<(), Error> {
         trace!("Writing log entry {} to disk", log.index);
         self.db
-            .insert(log.index.to_be_bytes(), log.log)
+            .insert(log.index.to_be_bytes(), bincode::serialize(&log.log).expect("must serialize"))
             .map(|_| ())
             .map_err(|_| Error::UnknownError)
     }
@@ -112,9 +104,9 @@ fn main() -> Result<(), std::io::Error> {
     let db: sled::Db = sled::open(db_path).unwrap();
 
     let state = KvMachine::new(&db);
-    let storage = SledLogStorage::new(&db);
+    let mut storage = SledLogStorage::new(&db);
 
-    let mut n = LocalNode::<KvCommand>::new(Config::default(), &state, &storage);
+    let mut n = LocalNode::<KvCommand>::new(Config::default(), &state, &mut storage);
 
     match n.run_election() {
         Ok(()) => {

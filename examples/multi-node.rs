@@ -36,44 +36,48 @@ impl StateMachine<SimpleCommand> for SimpleStateMachine {
     }
 }
 
-struct InMemoryLogStorage<LogType> {
-    logs: Collection<LogType>,
+struct InMemoryLogStorage<'entry, LogType> {
+    logs: Collection<'entry, LogType>,
 }
 
-impl<LogType> Storage<LogType> for InMemoryLogStorage<LogType> {
+impl<'entry, LogType> Storage<'entry, LogType> for InMemoryLogStorage<'entry, LogType> {
     fn get(&self, term: usize, index: usize) -> Result<LogType, ()> {
         if let Some(log) = self.logs.get(index) {}
 
         Err(())
     }
 
-    fn write(&mut self, log: Entry<LogType>) -> Result<(), Error> {
+    fn write(&mut self, log: &'entry Entry<LogType>) -> Result<(), Error> {
         self.logs.push(log);
         Ok(())
     }
 }
 
-impl<LogType> Default for InMemoryLogStorage<LogType> {
+impl<'entry, LogType> Default for InMemoryLogStorage<'entry, LogType> {
     fn default() -> Self {
         Self { logs: vec![] }
     }
 }
 
-struct LocalPeer<'state_machine, 'peers, 'log_storage, LogType> {
-    remote: Arc<Mutex<LocalNode<'state_machine, 'peers, 'log_storage, LogType>>>,
+struct LocalPeer<'state_machine, 'peers, 'log_storage, 'entry, LogType> {
+    remote: Arc<Mutex<LocalNode<'state_machine, 'peers, 'log_storage, 'entry, LogType>>>,
 }
 
-impl<'state_machine, 'peers, 'log_storage, LogType>
-    LocalPeer<'state_machine, 'peers, 'log_storage, LogType>
+impl<'state_machine, 'peers, 'log_storage, 'entry, LogType>
+    LocalPeer<'state_machine, 'peers, 'log_storage, 'entry, LogType>
 {
-    fn new(node: Arc<Mutex<LocalNode<'state_machine, 'peers, 'log_storage, LogType>>>) -> Self {
+    fn new(node: Arc<Mutex<LocalNode<'state_machine, 'peers, 'log_storage, 'entry, LogType>>>) -> Self {
         Self { remote: node }
     }
 }
 
-impl<'state_machine, 'peers, 'log_storage, LogType> Peer<LogType>
-    for LocalPeer<'state_machine, 'peers, 'log_storage, LogType>
+impl<'state_machine, 'peers, 'log_storage, 'entry, LogType: 'entry> Peer<'entry, LogType>
+    for LocalPeer<'state_machine, 'peers, 'log_storage, 'entry, LogType>
 {
+    fn id(&self) -> usize {
+        self.remote.lock().unwrap().id()
+    }
+
     fn request_vote(
         &self,
         term: usize,
@@ -93,7 +97,7 @@ impl<'state_machine, 'peers, 'log_storage, LogType> Peer<LogType>
         leader_id: usize,
         prev_log_index: usize,
         prev_log_term: Term,
-        entries: Collection<LogType>,
+        entries: Collection<'entry, LogType>,
         leader_commit: usize,
     ) -> Result<(), Error> {
         self.remote.lock().unwrap().append_entries(
@@ -113,45 +117,50 @@ fn main() {
         .init();
 
     let state1 = SimpleStateMachine { value: 0 };
-    let storage1 = InMemoryLogStorage::default();
+    let mut storage1 = InMemoryLogStorage::default();
     let node1 = Arc::new(Mutex::new(LocalNode::<SimpleCommand>::new(
         Config::default(),
         &state1,
-        &storage1,
+        &mut storage1,
     )));
 
     let state2 = SimpleStateMachine { value: 0 };
-    let storage2 = InMemoryLogStorage::default();
+    let mut storage2 = InMemoryLogStorage::default();
     let node2 = Arc::new(Mutex::new(LocalNode::<SimpleCommand>::new(
         Config::default(),
         &state2,
-        &storage2,
+        &mut storage2,
     )));
 
     let state3 = SimpleStateMachine { value: 0 };
-    let storage3 = InMemoryLogStorage::default();
+    let mut storage3 = InMemoryLogStorage::default();
     let node3 = Arc::new(Mutex::new(LocalNode::<SimpleCommand>::new(
         Config::default(),
         &state3,
-        &storage3,
+        &mut storage3,
     )));
 
     let peer1 = LocalPeer::<SimpleCommand>::new(node1.clone());
     let peer2 = LocalPeer::<SimpleCommand>::new(node2.clone());
     let peer3 = LocalPeer::<SimpleCommand>::new(node3.clone());
 
-    node1.lock().unwrap().add_peer(&peer2);
-    node1.lock().unwrap().add_peer(&peer3);
+    let mut node1 = node1.lock().unwrap();
+    node1.add_peer(&peer2);
+    node1.add_peer(&peer3);
 
-    node2.lock().unwrap().add_peer(&peer1);
-    node2.lock().unwrap().add_peer(&peer2);
+    let mut node2 = node2.lock().unwrap();
+    node2.add_peer(&peer1);
+    node2.add_peer(&peer2);
+    drop(node2);
 
-    node3.lock().unwrap().add_peer(&peer1);
-    node3.lock().unwrap().add_peer(&peer2);
+    let mut node3 = node3.lock().unwrap();
+    node3.add_peer(&peer1);
+    node3.add_peer(&peer2);
+    drop(node3);
 
-    match node1.lock().unwrap().run_election() {
+    match node1.run_election() {
         Ok(()) => {
-            info!("Election finished!");
+            info!("Election finished, became {:?}", node1.role());
         }
         Err(err) => {
             error!("Election error: {:?}", err);

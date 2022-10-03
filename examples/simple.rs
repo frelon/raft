@@ -34,22 +34,22 @@ impl StateMachine<SimpleCommand> for SimpleStateMachine {
     }
 }
 
-struct InMemoryLogStorage<LogType> {
-    logs: Collection<LogType>,
+struct InMemoryLogStorage<'entry, LogType> {
+    logs: Collection<'entry, LogType>,
 }
 
-impl<LogType> Storage<LogType> for InMemoryLogStorage<LogType> {
+impl<'entry, LogType> Storage<'entry, LogType> for InMemoryLogStorage<'entry, LogType> {
     fn get(&self, term: Term, index: usize) -> Result<LogType, ()> {
         todo!()
     }
 
-    fn write(&mut self, log: Entry<LogType>) -> Result<(), Error> {
+    fn write(&mut self, log: &'entry Entry<LogType>) -> Result<(), Error> {
         self.logs.push(log);
         Ok(())
     }
 }
 
-impl<LogType> Default for InMemoryLogStorage<LogType> {
+impl<'entry, LogType> Default for InMemoryLogStorage<'entry, LogType> {
     fn default() -> Self {
         Self { logs: vec![] }
     }
@@ -61,8 +61,8 @@ fn main() {
         .init();
 
     let state = SimpleStateMachine { value: 0 };
-    let storage = InMemoryLogStorage::default();
-    let mut n = LocalNode::<SimpleCommand>::new(Config::default(), &state, &storage);
+    let mut storage = InMemoryLogStorage::default();
+    let mut n = LocalNode::<SimpleCommand>::new(Config::default(), &state, &mut storage);
 
     match n.run_election() {
         Ok(()) => {

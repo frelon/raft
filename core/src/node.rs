@@ -2,7 +2,7 @@ use alloc::vec::Vec;
 
 use core::time::Duration;
 
-use log::trace;
+use log::{trace,error};
 
 use crate::{
     log::{Collection, Entry, Storage},
@@ -27,7 +27,8 @@ pub enum Role {
     Leader,
 }
 
-pub trait Peer<LogType> {
+pub trait Peer<'entry, LogType> {
+    fn id(&self) -> usize;
     fn request_vote(
         &self,
         term: Term,
@@ -41,7 +42,7 @@ pub trait Peer<LogType> {
         leader_id: usize,
         prev_log_index: usize,
         prev_log_term: Term,
-        entries: Collection<LogType>,
+        entries: Collection<'entry, LogType>,
         leader_commit: usize,
     ) -> Result<(), Error>;
 }
@@ -50,15 +51,15 @@ pub trait StateMachine<LogType> {
     fn apply(&mut self, log: LogType) -> Result<(), Error>;
 }
 
-pub struct LocalNode<'state_machine, 'peers, 'log_storage, LogType> {
+pub struct LocalNode<'state_machine, 'peers, 'log_storage, 'entry, LogType> {
     config: Config,
     current_term: Option<usize>,
     voted_for: Option<usize>,
     leader_id: Option<usize>,
     role: Role,
 
-    peers: Vec<&'peers dyn Peer<LogType>>,
-    logs: &'log_storage dyn Storage<LogType>,
+    peers: Vec<&'peers dyn Peer<'entry, LogType>>,
+    log_storage: &'log_storage mut dyn Storage<'entry, LogType>,
     state_machine: &'state_machine dyn StateMachine<LogType>,
 }
 
@@ -85,13 +86,13 @@ impl Config {
     }
 }
 
-impl<'state_machine, 'peers, 'log_storage, LogType>
-    LocalNode<'state_machine, 'peers, 'log_storage, LogType>
+impl<'state_machine, 'peers, 'log_storage, 'entry, LogType: 'entry>
+    LocalNode<'state_machine, 'peers, 'log_storage, 'entry, LogType>
 {
     pub fn new(
         config: Config,
         state_machine: &'state_machine dyn StateMachine<LogType>,
-        log_storage: &'log_storage dyn Storage<LogType>,
+        log_storage: &'log_storage mut dyn Storage<'entry, LogType>,
     ) -> Self {
         trace!("Creating new LocalNode");
 
@@ -100,11 +101,15 @@ impl<'state_machine, 'peers, 'log_storage, LogType>
             voted_for: None,
             leader_id: None,
             peers: vec![],
-            logs: log_storage,
+            log_storage,
             role: Role::Follower,
             state_machine,
             config,
         }
+    }
+
+    pub fn id(&self) -> usize {
+        self.config.id
     }
 
     pub fn with_term(mut self, term: usize) -> Self {
@@ -121,11 +126,11 @@ impl<'state_machine, 'peers, 'log_storage, LogType>
         &self.role
     }
 
-    pub fn storage(&self) -> &dyn Storage<LogType> {
-        self.logs
+    pub fn storage(&self) -> &dyn Storage<'entry, LogType> {
+        self.log_storage
     }
 
-    pub fn add_peer(&mut self, peer: &'peers dyn Peer<LogType>) {
+    pub fn add_peer(&mut self, peer: &'peers dyn Peer<'entry, LogType>) {
         self.peers.push(peer)
     }
 
@@ -142,9 +147,15 @@ impl<'state_machine, 'peers, 'log_storage, LogType>
         trace!("Sending request_vote to {} peers", self.peers.len());
         for peer in self.peers.iter_mut() {
             match peer.request_vote(new_term, self.config.id, 0, 0) {
-                Ok(Vote::For) => votes += 1,
-                Ok(Vote::Against) => {}
-                Err(_) => {
+                Ok(Vote::For) => {
+                    trace!("peer {} voted FOR", peer.id());
+                    votes += 1;
+                },
+                Ok(Vote::Against) => {
+                    trace!("peer {} voted AGAINST", peer.id());
+                }
+                Err(err) => {
+                    error!("requested vote from peer {}, but got error {:?}", peer.id(), err);
                     return Err(Error::UnknownError);
                 }
             }
@@ -182,14 +193,19 @@ impl<'state_machine, 'peers, 'log_storage, LogType>
     ) -> Result<Vote, Error> {
         trace!("Received request_vote for term {term}");
 
-        let current_term = self.current_term.unwrap_or(0);
+        if self.current_term.is_none() {
+            trace!("no term, voting for!");
+            return Ok(Vote::For);
+        }
+
+        let current_term = self.current_term.expect("is not none");
 
         if term < current_term {
             trace!("Term {term} < {current_term}, voting against");
             return Ok(Vote::Against);
         }
 
-        let Ok(log_entry) = self.logs.get(last_log_term, last_log_index) else {
+        let Ok(log_entry) = self.log_storage.get(last_log_term, last_log_index) else {
             trace!("Log does not contain entry at {last_log_index},{last_log_term}");
             return Ok(Vote::Against);
         };
@@ -204,7 +220,7 @@ impl<'state_machine, 'peers, 'log_storage, LogType>
         leader_id: usize,
         prev_log_index: usize,
         prev_log_term: Term,
-        entries: Vec<Entry<LogType>>,
+        entries: Collection<'entry, LogType>,
         leader_commit: usize,
     ) -> Result<(), Error> {
         trace!("Received append_entries for term {term}");
@@ -217,8 +233,8 @@ impl<'state_machine, 'peers, 'log_storage, LogType>
             self.leader_id = Some(leader_id);
         }
 
-        if entries.len() != 0 {
-            todo!("Append entries");
+        for entry in entries {
+            self.log_storage.write(&entry);
         }
 
         Ok(())
@@ -229,7 +245,11 @@ impl<'state_machine, 'peers, 'log_storage, LogType>
 mod tests {
     use super::*;
 
+    #[derive(Default)]
+    #[non_exhaustive]
     enum Command {
+        #[default] 
+        Noop,
         Set(u32),
         Incr,
         Decr,
@@ -245,39 +265,40 @@ mod tests {
                 Command::Set(x) => self.value = x,
                 Command::Incr => self.value += 1,
                 Command::Decr => self.value -= 1,
+                _ => {},
             }
 
             Ok(())
         }
     }
 
-    struct InMemoryLogStorage<LogType> {
-        logs: Collection<LogType>,
+    #[derive(Default)]
+    struct InMemoryLogStorage<'entry, LogType> {
+        logs: Collection<'entry, LogType>,
     }
 
-    impl<LogType> Storage<LogType> for InMemoryLogStorage<LogType> {
+    impl<'entry, LogType> Storage<'entry, LogType> for InMemoryLogStorage<'entry, LogType> {
         fn get(&self, term: Term, index: usize) -> Result<LogType, ()> {
             if let Some(log) = self.logs.get(index) {}
 
             Err(())
         }
 
-        fn write(&mut self, log: Entry<LogType>) -> Result<(), ()> {
+        fn write(&mut self, log: &'entry Entry<LogType>) -> Result<(), Error> {
             self.logs.push(log);
             Ok(())
         }
     }
 
-    impl<LogType> Default for InMemoryLogStorage<LogType> {
-        fn default() -> Self {
-            Self { logs: vec![] }
-        }
-    }
-
     struct Voter {
+        id: usize,
         vote: Vote,
     }
-    impl<LogType> Peer<LogType> for Voter {
+    impl<'entry, LogType> Peer<'entry, LogType> for Voter {
+        fn id(&self) -> usize {
+            self.id 
+        }
+
         fn request_vote(
             &self,
             term: Term,
@@ -302,17 +323,18 @@ mod tests {
     }
 
     impl Voter {
-        fn new(vote: Vote) -> Self {
-            Self { vote }
+        fn new(id: usize, vote: Vote) -> Self {
+            Self { id, vote }
         }
     }
 
     #[test]
     fn new_node() {
+        let mut storage = InMemoryLogStorage::default();
         let _node = LocalNode::<Command>::new(
             Config::default(),
             &SimpleStateMachine { value: 20 },
-            &InMemoryLogStorage::default(),
+            &mut storage,
         );
         assert!(true)
     }
@@ -333,14 +355,14 @@ mod tests {
 
     #[test]
     fn election_peers_votes_yes() {
-        let storage = InMemoryLogStorage::default();
+        let mut storage = InMemoryLogStorage::default();
         let mut node1 = LocalNode::<Command>::new(
             Config::default(),
             &SimpleStateMachine { value: 0 },
-            &storage,
+            &mut storage,
         );
-        let node2 = Voter::new(Vote::For);
-        let node3 = Voter::new(Vote::For);
+        let node2 = Voter::new(2, Vote::For);
+        let node3 = Voter::new(3, Vote::For);
 
         node1.add_peer(&node2);
         node1.add_peer(&node3);
@@ -353,14 +375,14 @@ mod tests {
 
     #[test]
     fn election_peers_votes_no() {
-        let storage = InMemoryLogStorage::default();
+        let mut storage = InMemoryLogStorage::default();
         let mut node1 = LocalNode::<Command>::new(
             Config::default(),
             &SimpleStateMachine { value: 0 },
-            &storage,
+            &mut storage,
         );
-        let node2 = Voter::new(Vote::Against);
-        let node3 = Voter::new(Vote::Against);
+        let node2 = Voter::new(2, Vote::Against);
+        let node3 = Voter::new(3, Vote::Against);
 
         node1.add_peer(&node2);
         node1.add_peer(&node3);
@@ -373,13 +395,13 @@ mod tests {
 
     #[test]
     fn election_peers_small_majority() {
-        let storage = InMemoryLogStorage::default();
+        let mut storage = InMemoryLogStorage::default();
         let mut node1 =
-            LocalNode::<Command>::new(Config::new(1), &SimpleStateMachine { value: 0 }, &storage);
-        let node2 = Voter::new(Vote::Against);
-        let node3 = Voter::new(Vote::Against);
-        let node4 = Voter::new(Vote::For);
-        let node5 = Voter::new(Vote::For);
+            LocalNode::<Command>::new(Config::new(1), &SimpleStateMachine { value: 0 }, &mut storage);
+        let node2 = Voter::new(2, Vote::Against);
+        let node3 = Voter::new(3, Vote::Against);
+        let node4 = Voter::new(4, Vote::For);
+        let node5 = Voter::new(5, Vote::For);
 
         node1.add_peer(&node2);
         node1.add_peer(&node3);
@@ -395,13 +417,13 @@ mod tests {
 
     #[test]
     fn election_deadlock_no_progress() {
-        let storage = InMemoryLogStorage::default();
+        let mut storage = InMemoryLogStorage::default();
         let mut node1 = LocalNode::<Command>::new(
             Config::default(),
             &SimpleStateMachine { value: 0 },
-            &storage,
+            &mut storage,
         );
-        let node2 = Voter::new(Vote::Against);
+        let node2 = Voter::new(2, Vote::Against);
 
         node1.add_peer(&node2);
 
@@ -413,11 +435,11 @@ mod tests {
 
     #[test]
     fn request_vote_returns_against_for_smaller_term() {
-        let storage = InMemoryLogStorage::default();
+        let mut storage = InMemoryLogStorage::default();
         let mut node1 = LocalNode::<Command>::new(
             Config::default(),
             &SimpleStateMachine { value: 0 },
-            &storage,
+            &mut storage,
         )
         .with_term(10);
 
@@ -426,11 +448,11 @@ mod tests {
 
     #[test]
     fn heartbeat_with_higher_term_sets_follower() {
-        let storage = InMemoryLogStorage::default();
+        let mut storage = InMemoryLogStorage::default();
         let mut node1 = LocalNode::<Command>::new(
             Config::default(),
             &SimpleStateMachine { value: 0 },
-            &storage,
+            &mut storage,
         )
         .with_term(10)
         .with_role(Role::Leader);
@@ -445,11 +467,11 @@ mod tests {
 
     #[test]
     fn append_entries_adds_entries() {
-        let storage = InMemoryLogStorage::default();
+        let mut storage = InMemoryLogStorage::default();
         let mut node1 = LocalNode::<Command>::new(
             Config::default(),
             &SimpleStateMachine { value: 0 },
-            &storage,
+            &mut storage,
         )
         .with_term(10)
         .with_role(Role::Follower);
