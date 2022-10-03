@@ -191,22 +191,22 @@ impl<'state_machine, 'peers, 'log_storage, 'entry, LogType: 'entry>
         last_log_index: usize,
         last_log_term: Term,
     ) -> Result<Vote, Error> {
-        trace!("Received request_vote for term {term}");
+        trace!("Received request_vote for term {term} from {candidate_id}");
 
         if self.current_term.is_none() {
-            trace!("no term, voting for!");
+            trace!("no term, voting for {candidate_id}!");
             return Ok(Vote::For);
         }
 
         let current_term = self.current_term.expect("is not none");
 
         if term < current_term {
-            trace!("Term {term} < {current_term}, voting against");
+            trace!("Term {term} < {current_term}, voting against {candidate_id}");
             return Ok(Vote::Against);
         }
 
         let Ok(log_entry) = self.log_storage.get(last_log_term, last_log_index) else {
-            trace!("Log does not contain entry at {last_log_index},{last_log_term}");
+            trace!("Log does not contain entry at {last_log_index},{last_log_term}, voting against {candidate_id}");
             return Ok(Vote::Against);
         };
 
