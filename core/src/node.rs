@@ -151,6 +151,10 @@ impl<'state_machine, 'peers, 'log_storage, 'entry, LogType: 'entry>
 
         trace!("Starting new election for term {}", new_term);
 
+        self.current_term = Some(new_term);
+        self.voted_for = Some(self.id());
+        self.role = Role::Candidate;
+
         let mut votes = 1;
 
         trace!("Sending request_vote to {} peers", self.peers.len());
@@ -174,7 +178,6 @@ impl<'state_machine, 'peers, 'log_storage, 'entry, LogType: 'entry>
 
         if votes > ((self.peers.len() + 1) / 2) {
             trace!("Won election for term {}", new_term);
-            self.current_term = Some(new_term);
             self.role = Role::Leader;
             self.leader_id = Some(self.config.id);
 
@@ -187,6 +190,9 @@ impl<'state_machine, 'peers, 'log_storage, 'entry, LogType: 'entry>
                     }
                 }
             }
+        } else {
+            trace!("Lost election for term {new_term}, becoming Follower");
+            self.role = Role::Follower;
         }
 
         trace!("Election concluded for term {new_term}");
@@ -411,7 +417,7 @@ mod tests {
 
         assert!(node1.run_election().is_ok());
 
-        assert_eq!(node1.current_term, None);
+        assert_eq!(node1.current_term, Some(0));
         assert_eq!(node1.role, Role::Follower);
     }
 
@@ -451,7 +457,7 @@ mod tests {
 
         assert!(node1.run_election().is_ok());
 
-        assert_eq!(node1.current_term, None);
+        assert_eq!(node1.current_term, Some(0));
         assert_eq!(node1.role, Role::Follower);
     }
 
