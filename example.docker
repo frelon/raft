@@ -1,0 +1,8 @@
+FROM ghcr.io/rust-lang/rust:nightly-slim as builder
+WORKDIR /usr/src/raft
+COPY . .
+RUN cargo install --example kv --path .
+
+FROM debian:bullseye-slim
+COPY --from=builder /usr/local/cargo/bin/kv /usr/local/bin/kv
+CMD ["kv"]

@@ -1,0 +1,38 @@
+services:
+  node1:
+    image: frelon/kv-raft
+    build:
+      context: .
+      dockerfile: example.docker
+    volumes:
+      - node1:/etc/kv-raft
+    networks:
+      - raft-net
+
+  node2:
+    image: frelon/kv-raft
+    build:
+      context: .
+      dockerfile: example.docker
+    volumes:
+      - node2:/etc/kv-raft
+    networks:
+      - raft-net
+
+  node3:
+    image: frelon/kv-raft
+    build:
+      context: .
+      dockerfile: example.docker
+    volumes:
+      - node3:/etc/kv-raft
+    networks:
+      - raft-net
+
+volumes:
+  node1: {}
+  node2: {}
+  node3: {}
+
+networks:
+  raft-net: {}

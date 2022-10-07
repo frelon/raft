@@ -134,6 +134,11 @@ impl<'state_machine, 'peers, 'log_storage, 'entry, LogType: 'entry>
         self.peers.push(peer)
     }
 
+    pub fn tick(&mut self, delta:Duration) -> Result<(), Error> {
+        trace!("Tick {:?}", delta);
+        Ok(())
+    }
+
     /// Candidates (§5.2):
     /// On conversion to candidate, start election:
     /// - Increment currentTerm
