@@ -267,7 +267,7 @@ impl<'state_machine, 'peers, 'log_storage, 'entry, LogType: 'entry>
         }
 
         for entry in entries {
-            self.log_storage.write(&entry);
+            self.log_storage.write(&entry)?;
         }
 
         Ok(())

@@ -14,8 +14,9 @@ use serde::{Serialize, Deserialize};
 
 use crossbeam_channel::{bounded, tick, Receiver, select};
 
-
 use clap::{arg, command};
+
+use proto_grpc::GrpcPeer;
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 enum KvCommand {

@@ -1,0 +1,17 @@
+[package]
+name = "proto-grpc"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+protobuf        = "2"
+httpbis         = { git = "https://github.com/stepancheg/rust-http2" }
+grpc            = "*"
+grpc-protobuf   = "*"
+futures         = "0.3.*"
+raft            = { path = "../core" }
+bincode         = "1.3.3"
+
+[build-dependencies]
+protoc-rust-grpc = "0.8.3"
+
